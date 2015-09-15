@@ -2,6 +2,7 @@
 from __future__ import print_function
 from builtins import input
 import argparse
+import copy
 import dateutil.parser
 from datetime import datetime
 import logging
@@ -9,10 +10,12 @@ import os
 import subprocess
 import sys
 
+
 import airflow
 from airflow import jobs, settings, utils
 from airflow.configuration import conf
 from airflow.executors import DEFAULT_EXECUTOR
+from airflow.hooks import HiveCliHook
 from airflow.models import DagBag, TaskInstance, DagPickle
 from airflow.utils import AirflowException
 
@@ -65,6 +68,61 @@ def backfill(args):
         donot_pickle=args.donot_pickle,
         ignore_dependencies=args.ignore_dependencies)
 
+
+def one_task_hql(args):
+    subdir = None
+    dagbag = DagBag(subdir)
+    dag = dagbag.dags[args.dag_id]
+    task = dag.get_task(task_id=args.task_id)
+    task = copy.copy(task)
+    args.execution_date = dateutil.parser.parse(args.execution_date)
+    task.resolve_template_files()
+    ti = TaskInstance(task, args.execution_date)
+    ti.render_templates()
+    if hasattr(task, 'hql'):
+        #print task.hql
+        test_hql(task.hql)
+
+
+def task_hql(dag, task_id, execution_date):
+    task = dag.get_task(task_id=task_id)
+    task = copy.copy(task)
+    execution_date = dateutil.parser.parse(execution_date)
+    task.resolve_template_files()
+    ti = TaskInstance(task, execution_date)
+    ti.render_templates()
+    if hasattr(task, 'hql'):
+        #print task.hql
+        test_hql(task.hql)
+
+
+def test_hql(hql):
+    hive = HiveCliHook()
+    create = []
+    insert = []
+    other = []
+    for query in hql.split(';'):  # naive
+        if 'create table' in query.lower():
+            create.append(query)
+        elif 'set' in query.lower() or 'add jar' in query.lower() or 'temporary' in query.lower():
+            other.append(query)
+        elif 'select' in query.lower():
+            insert.append(query)
+    other = ';'.join(other)
+    for query in create:
+        result = hive.run_cli('explain ' + query)
+        print(result)
+    for query in insert:
+        result = hive.run_cli(other + '; explain ' + query)
+        print(result)
+
+
+def dag_hql(args):
+    subdir = None
+    dagbag = DagBag(subdir)
+    dag = dagbag.dags[args.dag_id]
+    for t in dag.tasks:
+        task_hql(dag, t.task_id, args.execution_date)
 
 def run(args):
 
@@ -564,6 +622,19 @@ def get_parser():
     parser_flower.add_argument(
         "-a", "--broker_api", help="Broker api")
     parser_flower.set_defaults(func=flower)
+
+    ht = "Render task HQL"
+    parser_task_hql = subparsers.add_parser('task_hql', help=ht)
+    parser_task_hql.add_argument("dag_id", help="id of the dag")
+    parser_task_hql.add_argument("task_id", help="id of the task")
+    parser_task_hql.add_argument("execution_date", help="execution date")
+    parser_task_hql.set_defaults(func=one_task_hql)
+
+    ht = "Render all DAG HQL"
+    parser_dag_hql = subparsers.add_parser('dag_hql', help=ht)
+    parser_dag_hql.add_argument("dag_id", help="id of the dag")
+    parser_dag_hql.add_argument("execution_date", help="execution date")
+    parser_dag_hql.set_defaults(func=dag_hql)
 
     parser_version = subparsers.add_parser('version', help="Show version")
     parser_version.set_defaults(func=version)

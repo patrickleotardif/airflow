@@ -84,7 +84,7 @@ class HiveCliHook(BaseHook):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     cwd=tmp_dir)
-                all_err = ''
+                # all_err = ''
                 self.sp = sp
                 stdout = ''
                 for line in iter(sp.stdout.readline, ''):
@@ -93,9 +93,11 @@ class HiveCliHook(BaseHook):
                 sp.wait()
 
                 if sp.returncode:
-                    raise AirflowException(all_err)
+                    return (False, stdout.split('\n'))
+                #     print stdout
+                #     raise AirflowException(all_err)
 
-                return stdout
+                return (True, stdout)
 
     def load_file(
             self,
